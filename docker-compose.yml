@@ -1,0 +1,126 @@
+version: '3'
+
+networks:
+  osint_collector:
+    driver: bridge
+
+services:
+  # -------------------------------------------------------------------------- #
+  # Core Python service to collect Telegram/other messages
+  # -------------------------------------------------------------------------- #
+
+  collector:
+    build:
+      context: .
+      dockerfile: Dockerfile.collector
+    networks:
+      - osint_collector
+    depends_on:
+      database:
+        condition: service_healthy
+    environment:
+      - CELERY_BROKER_URL=amqp://rabbitmq
+      - TELEGRAM_API_ID=${TELEGRAM_API_ID}
+      - TELEGRAM_API_HASH=${TELEGRAM_API_HASH}
+      - PYTHONPATH=/app/collection:/app/shared
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - PYTHONDONTWRITEBYTECODE=1
+    volumes:
+      - ./collection:/app/collection
+      - ./shared:/app/shared
+
+  # -------------------------------------------------------------------------- #
+  # Worker task to perform translation of stored data
+  # -------------------------------------------------------------------------- #
+
+  translation-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    networks:
+        - osint_collector
+    depends_on:
+      database:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    command: ["celery", "-A", "tasks.translate", "worker", "--loglevel=info", "--without-gossip", "--without-mingle", "--without-heartbeat", "-Q", "translation"]
+    environment:
+      - CELERY_BROKER_URL=amqp://rabbitmq
+      - TELEGRAM_API_ID=${TELEGRAM_API_ID}
+      - TELEGRAM_API_HASH=${TELEGRAM_API_HASH}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - PYTHONPATH=/app/workers:/app/shared
+      - PYTHONDONTWRITEBYTECODE=1
+    volumes:
+      - ./workers:/app/workers
+      - ./shared:/app/shared
+
+  # -------------------------------------------------------------------------- #
+  # Worker task to perform analysis of stored data
+  # -------------------------------------------------------------------------- #
+
+  analysis-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    networks:
+        - osint_collector
+    depends_on:
+      database:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    command: ["celery", "-A", "tasks.analyse", "worker", "--loglevel=info", "--without-gossip", "--without-mingle", "--without-heartbeat", "-Q", "analysis"]
+    environment:
+      - CELERY_BROKER_URL=amqp://rabbitmq
+      - TELEGRAM_API_ID=${TELEGRAM_API_ID}
+      - TELEGRAM_API_HASH=${TELEGRAM_API_HASH}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - PYTHONPATH=/app/workers:/app/shared
+      - PYTHONDONTWRITEBYTECODE=1
+    volumes:
+      - ./workers:/app/workers
+      - ./shared:/app/shared
+
+  # -------------------------------------------------------------------------- #
+  # MySQL database for storage of collected data
+  # -------------------------------------------------------------------------- #
+
+  database:
+    image: mysql:latest
+    networks:
+      - osint_collector
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 5s
+      retries: 10
+
+  # -------------------------------------------------------------------------- #
+  # RabbitMQ queue for Celery tasks (analysis workers)
+  # -------------------------------------------------------------------------- #
+
+  rabbitmq:
+    image: "rabbitmq:management-alpine"
+    networks:
+      - osint_collector
+    healthcheck:
+      test: ["CMD", "rabbitmqctl", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # -------------------------------------------------------------------------- #

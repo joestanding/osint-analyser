@@ -1,0 +1,15 @@
+# Environment variables loaded by Docker
+.env
+
+# Virtual environment for Python
+.venv
+
+# Telethon session files, in any location, just in case
+*.session
+*.session-journal
+
+# Python build artifacts
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
